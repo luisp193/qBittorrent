@@ -1,0 +1,149 @@
+# Compilación propia de qBittorrent (GUI) para Ubuntu como AppImage.
+# Publica una release con qBittorrent_V<n>-x86_64.AppImage y un nombre fijo
+# qBittorrent-x86_64.AppImage (enlace estable de descarga).
+name: Build - Ubuntu AppImage
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  LIBTORRENT_VERSION: "2.0.15"
+  QT_VERSION: "6.6.3"
+  BOOST_VERSION: "1.77.0"
+  BOOST_SHA256: "5347464af5b14ac54bb945dc68f1dd7c56f0dad7262816b956138fc53bcc0131"
+
+jobs:
+  build:
+    name: Build AppImage
+    runs-on: ubuntu-latest
+    env:
+      boost_path: "${{ github.workspace }}/../boost"
+      libtorrent_path: "${{ github.workspace }}/../libtorrent"
+      harden_flags: "-D_FORTIFY_SOURCE=3 -D_GLIBCXX_ASSERTIONS"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Read version
+        id: ver
+        run: |
+          V="$(tr -dc '0-9' < version.txt)"
+          echo "n=$V" >> "$GITHUB_OUTPUT"
+          echo "name=qBittorrent_V$V" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y build-essential cmake ninja-build libssl-dev zlib1g-dev libfuse2t64 || \
+          sudo apt install -y build-essential cmake ninja-build libssl-dev zlib1g-dev libfuse2
+
+      - name: Setup ccache
+        uses: Chocobo1/setup-ccache-action@v1
+        with:
+          update_packager_index: false
+          ccache_options: |
+            max_size=1G
+
+      - name: Install boost
+        run: |
+          B="${BOOST_VERSION//./_}"
+          curl -L -o "${{ runner.temp }}/boost.tar.gz" "https://archives.boost.io/release/${BOOST_VERSION}/source/boost_${B}.tar.gz" \
+            || curl -L -o "${{ runner.temp }}/boost.tar.gz" "https://sourceforge.net/projects/boost/files/boost/${BOOST_VERSION}/boost_${B}.tar.gz"
+          echo "${BOOST_SHA256}  ${{ runner.temp }}/boost.tar.gz" | sha256sum -c -
+          tar -xf "${{ runner.temp }}/boost.tar.gz" -C "${{ github.workspace }}/.."
+          mv "${{ github.workspace }}/.."/boost_* "${{ env.boost_path }}"
+          cd "${{ env.boost_path }}"
+          ./bootstrap.sh
+          ./b2 stage --stagedir=./ --with-headers
+
+      - name: Install Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ env.QT_VERSION }}
+          archives: icu qtbase qtdeclarative qtsvg qttools
+          modules: qtimageformats
+          cache: true
+
+      - name: Install libtorrent
+        run: |
+          git clone --branch "v${LIBTORRENT_VERSION}" --depth 1 --recurse-submodules \
+            https://github.com/arvidn/libtorrent.git "${{ env.libtorrent_path }}"
+          cd "${{ env.libtorrent_path }}"
+          CFLAGS="$CFLAGS ${{ env.harden_flags }}" \
+          CXXFLAGS="$CXXFLAGS ${{ env.harden_flags }}" \
+          cmake -B build -G Ninja \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_CXX_STANDARD=20 \
+            -DBOOST_ROOT="${{ env.boost_path }}/lib/cmake" \
+            -Ddeprecated-functions=OFF
+          cmake --build build
+          sudo cmake --install build
+
+      - name: Build qBittorrent
+        run: |
+          CFLAGS="$CFLAGS ${{ env.harden_flags }}" \
+          CXXFLAGS="$CXXFLAGS ${{ env.harden_flags }}" \
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBOOST_ROOT="${{ env.boost_path }}/lib/cmake" \
+            -DCMAKE_INSTALL_PREFIX="/usr" \
+            -DGUI=ON
+          cmake --build build
+          QT_QPA_PLATFORM=offscreen build/qbittorrent -v
+          DESTDIR="qbittorrent" cmake --install build
+
+      - name: Put version in the app name
+        run: |
+          N="${{ steps.ver.outputs.name }}"
+          for f in qbittorrent/usr/share/applications/*.desktop; do
+            sed -i -E "s/^(Name(\[[^]]*\])?=)qBittorrent$/\1${N}/" "$f"
+          done
+          grep -h '^Name=' qbittorrent/usr/share/applications/*.desktop
+
+      - name: Package AppImage
+        run: |
+          curl -L -Z \
+            -O https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage \
+            -O https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage \
+            -O https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          chmod +x linuxdeploy-*.AppImage
+          rm -f "$QT_PLUGIN_PATH/sqldrivers/libqsqlmimer.so" "$QT_PLUGIN_PATH/sqldrivers/libqsqlmysql.so"
+          ./linuxdeploy-x86_64.AppImage --appdir qbittorrent --plugin qt
+          mkdir -p qbittorrent/apprun-hooks
+          rm -f qbittorrent/apprun-hooks/*
+          cp .github/workflows/helper/appimage/export_vars.sh qbittorrent/apprun-hooks/export_vars.sh
+          mkdir -p upload
+          NO_APPSTREAM=1 OUTPUT="upload/${{ steps.ver.outputs.name }}-x86_64.AppImage" \
+            ./linuxdeploy-x86_64.AppImage --appdir qbittorrent --output appimage
+          cp "upload/${{ steps.ver.outputs.name }}-x86_64.AppImage" upload/qBittorrent-x86_64.AppImage
+          ls -la upload
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.ver.outputs.name }}-x86_64
+          path: upload/${{ steps.ver.outputs.name }}-x86_64.AppImage
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="V${{ steps.ver.outputs.n }}"
+          gh release delete "$TAG" --yes --cleanup-tag -R "$GITHUB_REPOSITORY" 2>/dev/null || true
+          gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --latest \
+            --title "${{ steps.ver.outputs.name }}" \
+            --notes "Compilación de qBittorrent para Ubuntu (x86_64), commit ${GITHUB_SHA::7}." \
+            upload/*.AppImage
