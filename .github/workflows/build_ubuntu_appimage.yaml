@@ -6,6 +6,8 @@ name: Build - Ubuntu AppImage
 on:
   push:
     branches: [master]
+    paths-ignore:
+      - "CLAUDE.md"
   workflow_dispatch:
 
 permissions:
