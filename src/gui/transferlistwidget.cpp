@@ -30,6 +30,7 @@
 #include "transferlistwidget.h"
 
 #include <algorithm>
+#include <chrono>
 
 #include <QClipboard>
 #include <QDebug>
@@ -42,6 +43,7 @@
 #include <QRegularExpression>
 #include <QSet>
 #include <QShortcut>
+#include <QTimer>
 #include <QWheelEvent>
 
 #include "base/bittorrent/session.h"
@@ -229,6 +231,13 @@ TransferListWidget::TransferListWidget(IGUIApplication *app, QWidget *parent)
     connect(recheckHotkey, &QShortcut::activated, this, &TransferListWidget::recheckSelectedTorrents);
     const auto *forceStartHotkey = new QShortcut((Qt::CTRL | Qt::Key_M), this, nullptr, nullptr, Qt::WidgetShortcut);
     connect(forceStartHotkey, &QShortcut::activated, this, &TransferListWidget::forceStartSelectedTorrents);
+
+    // Revisión de descargas borradas: al poco de arrancar y después una vez al día
+    QTimer::singleShot(std::chrono::minutes(2), this, &TransferListWidget::checkDeletedAllTorrents);
+    auto *deletedCheckTimer = new QTimer(this);
+    deletedCheckTimer->setInterval(std::chrono::hours(24));
+    connect(deletedCheckTimer, &QTimer::timeout, this, &TransferListWidget::checkDeletedAllTorrents);
+    deletedCheckTimer->start();
 }
 
 TransferListWidget::~TransferListWidget()
@@ -655,6 +664,80 @@ void TransferListWidget::setTorrentOptions()
     dialog->open();
 }
 
+namespace
+{
+    const QString DELETED_CATEGORY = u"BORRADAS"_s;
+
+    // Una descarga se considera borrada cuando ninguno de los archivos que ya
+    // había descargado (aunque fuera en parte) sigue existiendo en el disco.
+    // Si no existe ni la carpeta de destino, no se marca (puede ser un disco
+    // externo desconectado).
+    bool isTorrentDeleted(const BitTorrent::Torrent *torrent)
+    {
+        if (!torrent->hasMetadata() || torrent->isChecking() || torrent->isMoving())
+            return false;
+
+        const Path storageLocation = torrent->actualStorageLocation();
+        if (storageLocation.isEmpty() || !storageLocation.exists())
+            return false;
+
+        const QList<qreal> progress = torrent->filesProgress();
+        bool hadFiles = false;
+        for (int i = 0; i < torrent->filesCount(); ++i)
+        {
+            if ((i < progress.size()) && (progress[i] <= 0))
+                continue;
+
+            hadFiles = true;
+            if ((storageLocation / torrent->actualFilePath(i)).exists())
+                return false;
+        }
+
+        return hadFiles;
+    }
+}
+
+int TransferListWidget::moveDeletedTorrents(const QList<BitTorrent::Torrent *> &torrents)
+{
+    auto *session = BitTorrent::Session::instance();
+    int count = 0;
+    for (BitTorrent::Torrent *torrent : torrents)
+    {
+        if ((torrent->category() == DELETED_CATEGORY) || !isTorrentDeleted(torrent))
+            continue;
+
+        if (!session->categories().contains(DELETED_CATEGORY))
+            session->addCategory(DELETED_CATEGORY);
+
+        // Sin gestión automática para que el cambio de categoría no mueva nada
+        torrent->setAutoTMMEnabled(false);
+        torrent->setCategory(DELETED_CATEGORY);
+        torrent->stop();
+        LogMsg(tr("Descarga borrada del disco, pasada a %1: \"%2\"").arg(DELETED_CATEGORY, torrent->name()));
+        ++count;
+    }
+
+    return count;
+}
+
+void TransferListWidget::checkDeletedAllTorrents()
+{
+    moveDeletedTorrents(BitTorrent::Session::instance()->torrents());
+}
+
+void TransferListWidget::checkDeletedSelectedTorrents()
+{
+    const QList<BitTorrent::Torrent *> torrents = getSelectedTorrents();
+    if (torrents.isEmpty())
+        return;
+
+    const int moved = moveDeletedTorrents(torrents);
+    const QString message = (moved > 0)
+        ? tr("%1 de %2 descargas seleccionadas estaban borradas y se han pasado a %3.").arg(QString::number(moved), QString::number(torrents.size()), DELETED_CATEGORY)
+        : tr("Ninguna de las descargas seleccionadas está borrada: sus archivos siguen en el disco (o ya estaban en %1).").arg(DELETED_CATEGORY);
+    QMessageBox::information(this, tr("Comprobar borrado"), message);
+}
+
 void TransferListWidget::recheckSelectedTorrents()
 {
     if (Preferences::instance()->confirmTorrentRecheck())
@@ -1025,6 +1108,8 @@ void TransferListWidget::displayListMenu()
     connect(actionSetTorrentPath, &QAction::triggered, this, &TransferListWidget::setSelectedTorrentsLocation);
     auto *actionForceRecheck = new QAction(UIThemeManager::instance()->getIcon(u"force-recheck"_s, u"document-edit-verify"_s), tr("Force rec&heck"), listMenu);
     connect(actionForceRecheck, &QAction::triggered, this, &TransferListWidget::recheckSelectedTorrents);
+    auto *actionCheckDeleted = new QAction(UIThemeManager::instance()->getIcon(u"edit-find"_s), tr("Comprobar borrado"), listMenu);
+    connect(actionCheckDeleted, &QAction::triggered, this, &TransferListWidget::checkDeletedSelectedTorrents);
     auto *actionForceReannounce = new QAction(UIThemeManager::instance()->getIcon(u"reannounce"_s, u"document-edit-verify"_s), tr("Force r&eannounce"), listMenu);
     connect(actionForceReannounce, &QAction::triggered, this, &TransferListWidget::reannounceSelectedTorrents);
     auto *actionCopyMagnetLink = new QAction(UIThemeManager::instance()->getIcon(u"torrent-magnet"_s, u"kt-magnet"_s), tr("&Magnet link"), listMenu);
@@ -1300,6 +1385,7 @@ void TransferListWidget::displayListMenu()
         listMenu->addSeparator();
     if (oneHasMetadata)
         listMenu->addAction(actionForceRecheck);
+    listMenu->addAction(actionCheckDeleted);
     // We can not force reannounce torrents that are stopped/errored/checking/missing files/queued.
     // We may already have the tracker list from magnet url. So we can force reannounce torrents without metadata anyway.
     listMenu->addAction(actionForceReannounce);
