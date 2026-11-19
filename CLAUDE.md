@@ -6,6 +6,8 @@ Fork personal del qBittorrent oficial con cambios propios, compilado como AppIma
 - Oficial (`upstream`): https://github.com/qbittorrent/qBittorrent
 - Copia local: `C:\Users\luis.perez\Documents\IA-PROGRAMACION\qBittorrent`
 - Remotos git: `origin` = fork, `upstream` = oficial
+- **Base: versiones estables oficiales** (tags `release-X.Y.Z`, que salen de las ramas `vX_Y_x`), no el `master` en desarrollo del oficial. Desde V3 la base es `release-5.3.0`.
+- La rama `respaldo-desarrollo` del fork guarda V1–V2, que estaban sobre el `master` en desarrollo (5.4 alpha). Solo es copia de seguridad.
 
 ## Objetivo
 
@@ -38,6 +40,7 @@ Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 |---|---|---|
 | V1 | Workflow de compilación AppImage con versión en el nombre | `.github/workflows/build_ubuntu_appimage.yaml`, `version.txt` |
 | V2 | Descargas borradas → categoría **BORRADAS**: revisión a los 2 min de arrancar y cada 24 h, y opción **"Comprobar borrado"** en el menú del botón derecho | `src/gui/transferlistwidget.cpp/.h` |
+| V3 | Cambios propios recolocados sobre la versión estable oficial 5.3.0, y revisión mensual automática | `.github/workflows/sync_upstream_monthly.yaml` |
 
 ### Detalle de "BORRADAS" (V2)
 
@@ -48,9 +51,22 @@ Código en `src/gui/transferlistwidget.cpp`: `isTorrentDeleted()`, `moveDeletedT
 - Al marcarla: se crea la categoría `BORRADAS` si no existe, se desactiva la gestión automática (para que no mueva archivos), se pone la categoría, se **detiene** y se anota en el Registro.
 - "Comprobar borrado" hace lo mismo con las seleccionadas y muestra un mensaje con el resultado.
 
+## Revisión mensual automática
+
+`.github/workflows/sync_upstream_monthly.yaml` se ejecuta el **día 1 de cada mes a las 06:00 UTC**. También se puede lanzar a mano con *Run workflow*.
+
+1. Busca el tag estable más nuevo del oficial (`release-X.Y.Z`, sin beta ni rc).
+2. Si ya está incluido en `master`, no hace nada.
+3. Si no lo está, lo junta (`git merge`) con `master`, sube `version.txt` +1, hace commit `V<n>: qBittorrent X.Y.Z con cambios propios` y push. Ese push lanza la compilación del AppImage.
+4. Después desactiva cualquier workflow del oficial que haya quedado activo (solo deben funcionar `build_ubuntu_appimage.yaml` y `sync_upstream_monthly.yaml`).
+5. **Si hay conflicto**, deja todo como estaba, abre un **issue** "Conflicto al juntar la versión oficial …" con la lista de archivos, y la ejecución sale en rojo (GitHub avisa por correo). Hay que resolverlo a mano (ver abajo).
+
+Usa el secreto **`SYNC_TOKEN`**, un token *fine-grained* de Luis solo para `luisp193/qBittorrent` con permisos Contents, Workflows y Actions en lectura y escritura. Hace falta porque el `GITHUB_TOKEN` normal no puede subir cambios en `.github/workflows` ni lanzar la compilación. **Caduca**: cuando caduque, la revisión fallará con "Falta el secreto" o con un error 401/403, y habrá que crear uno nuevo y sustituirlo.
+
+Si una versión nueva del oficial necesita otras versiones de Qt, libtorrent o Boost, la compilación fallará. En ese caso hay que actualizar las variables `env` de `build_ubuntu_appimage.yaml`, copiándolas de su `ci_ubuntu.yaml`.
+
 ## Pendiente / ideas acordadas
 
-- **Revisión mensual automática** de versiones nuevas del oficial: juntar la última versión estable (tags `release-x.y.z`) con `master`, subir `version.txt` y compilar; si hay conflicto, abrir un issue para resolverlo a mano. Necesita un token de GitHub con permiso `workflow` (lo crea Luis).
 - Simplificar la interfaz (Luis dirá qué le sobra).
 
 ## Cómo juntar una versión nueva del oficial a mano

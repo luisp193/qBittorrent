@@ -1,0 +1,120 @@
+# Revisión mensual: si el qBittorrent oficial ha sacado una versión estable
+# nueva (tag release-X.Y.Z), la junta con los cambios propios, sube version.txt
+# y hace push a master (eso lanza la compilación del AppImage).
+# Si hay conflicto, no toca nada y abre un issue para resolverlo a mano.
+#
+# Necesita el secreto SYNC_TOKEN: token de GitHub con permisos sobre este repo
+# de Contents, Workflows y Actions (lectura y escritura).
+name: Revisión mensual de versiones oficiales
+
+on:
+  schedule:
+    - cron: "0 6 1 * *"   # día 1 de cada mes, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sync-upstream
+
+jobs:
+  sync:
+    name: Juntar versión oficial nueva
+    runs-on: ubuntu-latest
+    steps:
+      - name: Comprobar token
+        env:
+          SYNC_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          if [ -z "$SYNC_TOKEN" ]; then
+            echo "::error::Falta el secreto SYNC_TOKEN (Settings > Secrets and variables > Actions)."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: Buscar versión estable nueva
+        id: find
+        run: |
+          git remote add upstream https://github.com/qbittorrent/qBittorrent.git
+          git fetch --quiet upstream --tags
+          TAG="$(git tag -l 'release-*' | grep -E '^release-[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          echo "Última versión estable oficial: $TAG"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if git merge-base --is-ancestor "$TAG" HEAD; then
+            echo "Ya está incluida. Nada que hacer."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Juntar con los cambios propios
+        id: merge
+        if: steps.find.outputs.new == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          TAG="${{ steps.find.outputs.tag }}"
+          if git merge --no-edit -m "Juntar versión oficial $TAG" "$TAG"; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > "$RUNNER_TEMP/conflictos.txt"
+            git merge --abort
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Avisar del conflicto (issue)
+        if: steps.merge.outputs.ok == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.find.outputs.tag }}"
+          TITLE="Conflicto al juntar la versión oficial $TAG"
+          if [ -n "$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "\"$TITLE\" in:title" --json number --jq '.[].number')" ]; then
+            echo "Ya hay un issue abierto para $TAG."
+          else
+            {
+              echo "La revisión mensual ha encontrado la versión oficial **$TAG**, pero choca con cambios propios."
+              echo
+              echo "No se ha tocado nada. Archivos en conflicto:"
+              echo
+              sed 's/^/- `/; s/$/`/' "$RUNNER_TEMP/conflictos.txt"
+              echo
+              echo "Pídele a Claude que lo resuelva a mano (ver CLAUDE.md, sección *Cómo juntar una versión nueva del oficial a mano*)."
+            } > "$RUNNER_TEMP/issue.md"
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$RUNNER_TEMP/issue.md"
+          fi
+          echo "::error::Conflicto al juntar $TAG. Se ha abierto un issue."
+          exit 1
+
+      - name: Subir versión y publicar
+        if: steps.merge.outputs.ok == 'true'
+        run: |
+          TAG="${{ steps.find.outputs.tag }}"
+          N=$(( $(tr -dc '0-9' < version.txt) + 1 ))
+          echo "$N" > version.txt
+          git add version.txt
+          git commit -m "V$N: qBittorrent ${TAG#release-} con cambios propios"
+          git push origin HEAD:master
+          echo "### Juntada $TAG → V$N (compilando)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Desactivar workflows del oficial
+        if: steps.merge.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.SYNC_TOKEN }}
+        run: |
+          # Solo deben funcionar los workflows propios
+          gh workflow list -R "$GITHUB_REPOSITORY" --all --json path,state --jq '.[] | select(.state=="active") | .path' |
+          while read -r p; do
+            case "$(basename "$p")" in
+              build_ubuntu_appimage.yaml|sync_upstream_monthly.yaml) ;;
+              *) echo "Desactivando $p"; gh workflow disable "$(basename "$p")" -R "$GITHUB_REPOSITORY" || true ;;
+            esac
+          done
