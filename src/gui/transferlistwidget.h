@@ -93,6 +93,7 @@ public slots:
     void openSelectedTorrentsFolder();
     void openDestinationFolder(const BitTorrent::Torrent *torrent);
     void recheckSelectedTorrents();
+    void checkDeletedSelectedTorrents();
     void reannounceSelectedTorrents();
     void setTorrentOptions();
     void previewSelectedTorrents();
@@ -138,6 +139,8 @@ private:
     void manageTorrentContent();
     void exportTorrent();
     void confirmRemoveAllTagsForSelection();
+    void checkDeletedAllTorrents();
+    int moveDeletedTorrents(const QList<BitTorrent::Torrent *> &torrents);
     TagSet askTagsForSelection(const QString &dialogTitle);
     void applyToSelectedTorrents(const std::function<void (BitTorrent::Torrent *const)> &fn);
     QList<BitTorrent::Torrent *> getVisibleTorrents() const;
