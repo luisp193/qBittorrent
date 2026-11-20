@@ -44,6 +44,7 @@ Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 | V3 | Cambios propios recolocados sobre la versión estable oficial 5.3.0, y revisión mensual automática | `.github/workflows/sync_upstream_monthly.yaml` |
 | V4 | Más ligero para ver películas con VLC: prioridad baja de disco y CPU, E/S de disco "simple pread/pwrite" por defecto y **modo película** (tortuga automática con VLC abierto) | `src/app/application.cpp`, `src/base/bittorrent/sessionimpl.cpp` |
 | V5 | BORRADAS pasa de categoría a **estado "Borradas"** en el panel Estado (la descarga conserva su categoría) | `src/base/torrentfilter.cpp/.h`, `src/gui/transferlistfilters/statusfilterwidget.cpp/.h`, `src/gui/transferlistfilters/tagfilterproxymodel.cpp/.h`, `src/gui/transferlistwidget.cpp/.h` |
+| V6 | Una descarga en estado "Archivos faltantes" (tras reiniciar con los archivos borrados el progreso vuelve a 0) también cuenta como borrada si no existe ningún archivo | `src/gui/transferlistwidget.cpp` |
 
 ### Detalle de "más ligero / modo película" (V4)
 
@@ -55,7 +56,7 @@ Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 
 Código en `src/gui/transferlistwidget.cpp`: `isTorrentDeleted()`, `hasFilesAgain()`, `migrateOldDeletedCategory()`, `moveDeletedTorrents()`, `restoreUndeletedTorrents()`, `checkDeletedAllTorrents()`, `checkDeletedSelectedTorrents()`; temporizador en el constructor de `TransferListWidget`.
 
-- Una descarga cuenta como borrada si **ninguno** de los archivos que ya tenía descargados (progreso > 0) existe en el disco. Si se borra solo una parte, no se marca.
+- Una descarga cuenta como borrada si **ninguno** de los archivos que ya tenía descargados (progreso > 0, o todos si está en estado "Archivos faltantes") existe en el disco. Si se borra solo una parte, no se marca.
 - No se marca si no existe ni la carpeta de destino (p. ej. disco externo desconectado), ni si está sin metadatos, comprobándose o moviéndose.
 - Al marcarla: se **detiene**, se le pone la etiqueta interna `BORRADAS` (`TorrentFilter::DeletedTag`) y se anota en el Registro. **No se le cambia la categoría.**
 - **Estado "Borradas"**: `TorrentFilter::Deleted` (último antes de `_Count`), con contador en el panel Estado (`statusfilterwidget.cpp`). Las borradas **solo salen en "Todos" y en "Borradas"**: `matchStatus()` las excluye de los demás estados (Completados, Detenido, etc.).

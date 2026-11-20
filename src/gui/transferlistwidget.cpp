@@ -689,11 +689,14 @@ namespace
         if (storageLocation.isEmpty() || !storageLocation.exists())
             return false;
 
+        // Tras reiniciar, si faltan los archivos, qBittorrent pone el progreso a 0 y
+        // el estado "Archivos faltantes": en ese caso se miran todos los archivos.
+        const bool missingFiles = (torrent->state() == BitTorrent::TorrentState::MissingFiles);
         const QList<qreal> progress = torrent->filesProgress();
         bool hadFiles = false;
         for (int i = 0; i < torrent->filesCount(); ++i)
         {
-            if ((i < progress.size()) && (progress[i] <= 0))
+            if (!missingFiles && (i < progress.size()) && (progress[i] <= 0))
                 continue;
 
             hadFiles = true;
