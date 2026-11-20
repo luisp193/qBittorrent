@@ -20,13 +20,14 @@ Fork personal del qBittorrent oficial con cambios propios, compilado como AppIma
 Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 
 - Se lanza en cada push a `master` (y a mano con *Run workflow*). Tarda unos 15 min.
-- Ubuntu `ubuntu-latest` (24.04), Qt 6.6.3, libtorrent 2.0.15, Boost 1.77, con interfaz gráfica (`GUI=ON`).
+- Ubuntu `ubuntu-latest` (desde noviembre de 2026 es **26.04**; antes era 24.04), Qt 6.6.3, libtorrent 2.0.15, Boost 1.77, con interfaz gráfica (`GUI=ON`).
 - Publica una release `V<n>` con:
   - `qBittorrent_V<n>-x86_64.AppImage` (con versión)
   - `qBittorrent-x86_64.AppImage` (nombre fijo). Enlace estable:
     https://github.com/luisp193/qBittorrent/releases/latest/download/qBittorrent-x86_64.AppImage
 - El nombre que se ve en el menú de Ubuntu es `qBittorrent_V<n>` (el workflow cambia `Name=` del `.desktop`).
-- El AppImage necesita Ubuntu 24.04 o posterior. Si da error de FUSE: `sudo apt install libfuse2t64`.
+- El AppImage necesita **Ubuntu 26.04 o posterior** (desde V4): al compilarse en 26.04 lleva una `libglib` que pide GLIBC 2.43, y en 24.04 no arranca. Luis usa Ubuntu 26.04.1 y decidió dejarlo así. Si algún día hace falta que funcione en 24.04, poner `runs-on: ubuntu-24.04` en `build_ubuntu_appimage.yaml`. Si da error de FUSE: `sudo apt install libfuse2t64`.
+- La web https://luis-gloria.com/ (repo `luisp193/luisp193.github.io`) ofrece la descarga con el enlace estable y dice "Ubuntu 26.04 o superior": si cambia el requisito, cambiarlo también allí.
 - Los workflows del oficial (`ci_*.yaml`, `stale_bot.yaml`) están **desactivados** en el fork desde la web de GitHub; no tocar sus archivos.
 
 ## Versión
