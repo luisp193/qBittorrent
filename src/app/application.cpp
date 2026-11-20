@@ -43,12 +43,20 @@
 #include <sys/resource.h>
 #endif
 
+#ifdef Q_OS_LINUX
+#include <sys/syscall.h>
+#include <unistd.h>
+#endif
+
 #include <QByteArray>
 #include <QDateTime>
 #include <QDebug>
 #include <QLibraryInfo>
 #include <QMetaObject>
 #include <QProcess>
+#include <QDir>
+#include <QFile>
+#include <QTimer>
 
 #ifndef DISABLE_GUI
 #include <QAbstractButton>
@@ -112,6 +120,98 @@
 
 #ifdef ENABLE_PLUGINS
 #include "base/plugins/pluginsengine.h"
+#endif
+
+#ifdef Q_OS_LINUX
+namespace
+{
+    // Propio: qBittorrent cede el disco y la CPU a los demás programas (p. ej. VLC).
+    // Se llama antes de crear los hilos de libtorrent, que heredan estos valores.
+    void applyLowProcessPriority()
+    {
+        // CPU: prioridad baja (nice 10)
+        [[maybe_unused]] const int cpuResult = ::setpriority(PRIO_PROCESS, 0, 10);
+
+        // Disco: clase "idle", solo usa el disco cuando nadie más lo necesita
+        const int IOPRIO_CLASS_SHIFT = 13;
+        const int IOPRIO_CLASS_IDLE = 3;
+        const int IOPRIO_WHO_PROCESS = 1;
+        [[maybe_unused]] const long ioResult = ::syscall(SYS_ioprio_set, IOPRIO_WHO_PROCESS, 0, (IOPRIO_CLASS_IDLE << IOPRIO_CLASS_SHIFT));
+    }
+
+    bool isVlcRunning()
+    {
+        const QStringList pids = QDir(u"/proc"_s).entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+        for (const QString &pid : pids)
+        {
+            if (pid.isEmpty() || !pid.at(0).isDigit())
+                continue;
+
+            QFile commFile {u"/proc/"_s + pid + u"/comm"_s};
+            if (!commFile.open(QIODevice::ReadOnly))
+                continue;
+
+            if (commFile.readAll().trimmed() == "vlc")
+                return true;
+        }
+        return false;
+    }
+
+    // Propio: "modo película". Mientras VLC esté abierto se activan los límites
+    // de velocidad alternativos (la tortuga) y se quitan al cerrarlo.
+    struct VlcWatcherState
+    {
+        bool vlcOpen = false;
+        bool changedByUs = false;
+    };
+    VlcWatcherState vlcWatcherState;
+
+    void startVlcWatcher(QObject *parent)
+    {
+        VlcWatcherState *state = &vlcWatcherState;
+
+        auto *timer = new QTimer(parent);
+        QObject::connect(timer, &QTimer::timeout, parent, [state]
+        {
+            auto *session = BitTorrent::Session::instance();
+            if (!session)
+                return;
+
+            const bool vlcOpen = isVlcRunning();
+            if (vlcOpen == state->vlcOpen)
+                return;
+
+            state->vlcOpen = vlcOpen;
+            if (vlcOpen)
+            {
+                if (!session->isAltGlobalSpeedLimitEnabled())
+                {
+                    session->setAltGlobalSpeedLimitEnabled(true);
+                    state->changedByUs = true;
+                    LogMsg(QCoreApplication::translate("Application", "VLC abierto: se activan los límites de velocidad alternativos (modo película)."));
+                }
+            }
+            else if (state->changedByUs)
+            {
+                session->setAltGlobalSpeedLimitEnabled(false);
+                state->changedByUs = false;
+                LogMsg(QCoreApplication::translate("Application", "VLC cerrado: se quitan los límites de velocidad alternativos."));
+            }
+        });
+        timer->start(5000);
+    }
+
+    // Si se cierra qBittorrent con VLC abierto, no dejar la tortuga puesta
+    void restoreVlcWatcherSpeedLimit()
+    {
+        auto *session = BitTorrent::Session::instance();
+        if (session && vlcWatcherState.changedByUs)
+        {
+            session->setAltGlobalSpeedLimitEnabled(false);
+            vlcWatcherState.changedByUs = false;
+        }
+    }
+}
 #endif
 
 namespace
@@ -908,7 +1008,15 @@ int Application::exec()
     Net::ProxyConfigurationManager::initInstance();
     Net::DownloadManager::initInstance();
 
+#ifdef Q_OS_LINUX
+    applyLowProcessPriority();
+#endif
+
     BitTorrent::Session::initInstance();
+
+#ifdef Q_OS_LINUX
+    startVlcWatcher(this);
+#endif
 
 #ifndef DISABLE_GUI
     UIThemeManager::initInstance();
@@ -1489,6 +1597,9 @@ void Application::cleanup()
     TorrentFilesWatcher::freeInstance();
 #ifdef DISABLE_GUI
     delete m_addTorrentManager;
+#endif
+#ifdef Q_OS_LINUX
+    restoreVlcWatcherSpeedLimit();
 #endif
     BitTorrent::Session::freeInstance();
     Net::ReverseResolution::freeInstance();

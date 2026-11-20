@@ -41,6 +41,13 @@ Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 | V1 | Workflow de compilación AppImage con versión en el nombre | `.github/workflows/build_ubuntu_appimage.yaml`, `version.txt` |
 | V2 | Descargas borradas → categoría **BORRADAS**: revisión a los 2 min de arrancar y cada 24 h, y opción **"Comprobar borrado"** en el menú del botón derecho | `src/gui/transferlistwidget.cpp/.h` |
 | V3 | Cambios propios recolocados sobre la versión estable oficial 5.3.0, y revisión mensual automática | `.github/workflows/sync_upstream_monthly.yaml` |
+| V4 | Más ligero para ver películas con VLC: prioridad baja de disco y CPU, E/S de disco "simple pread/pwrite" por defecto y **modo película** (tortuga automática con VLC abierto) | `src/app/application.cpp`, `src/base/bittorrent/sessionimpl.cpp` |
+
+### Detalle de "más ligero / modo película" (V4)
+
+- Al arrancar (solo Linux), antes de crear los hilos de libtorrent: `nice 10` y E/S de disco en clase **idle** (`ioprio_set`). qBittorrent solo usa el disco cuando VLC u otro programa no lo necesita. Funciones `applyLowProcessPriority()` en `application.cpp`.
+- Tipo de E/S de disco por defecto = `SimplePreadPwrite` en vez de `Default` (mmap). Evita los picos de memoria y de escritura a disco de libtorrent 2.0 que congelan el sistema. Se puede cambiar en Opciones → Avanzado → "Tipo de E/S de disco".
+- **Modo película**: cada 5 s mira en `/proc/*/comm` si hay un proceso `vlc`. Si lo hay, activa los límites de velocidad alternativos (la tortuga, por defecto 10 KiB/s) y lo anota en el Registro; al cerrar VLC los quita (solo si los puso él). Al salir de qBittorrent también los quita. Funciones `isVlcRunning()`, `startVlcWatcher()`, `restoreVlcWatcherSpeedLimit()`.
 
 ### Detalle de "BORRADAS" (V2)
 
