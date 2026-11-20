@@ -28,6 +28,7 @@
 
 #include "tagfilterproxymodel.h"
 
+#include "base/torrentfilter.h"
 #include "tagfiltermodel.h"
 
 TagFilterProxyModel::TagFilterProxyModel(QObject *parent)
@@ -51,4 +52,13 @@ bool TagFilterProxyModel::lessThan(const QModelIndex &left, const QModelIndex &r
     if (TagFilterModel::isSpecialItem(left) || TagFilterModel::isSpecialItem(right))
         return (left < right);
     return m_naturalLessThan(left.data().toString(), right.data().toString());
+}
+
+bool TagFilterProxyModel::filterAcceptsRow(const int sourceRow, const QModelIndex &sourceParent) const
+{
+    // La etiqueta interna de "Borradas" no se muestra: es un estado, no una etiqueta
+    const auto *model = static_cast<TagFilterModel *>(sourceModel());
+    if (model->tag(model->index(sourceRow, 0, sourceParent)) == TorrentFilter::DeletedTag)
+        return false;
+    return QSortFilterProxyModel::filterAcceptsRow(sourceRow, sourceParent);
 }

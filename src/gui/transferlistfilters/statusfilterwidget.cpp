@@ -85,11 +85,19 @@ StatusFilterWidget::StatusFilterWidget(QWidget *parent, TransferListWidget *tran
     auto *errored = new QListWidgetItem(this);
     errored->setData(Qt::DisplayRole, tr("Errored (0)"));
     errored->setData(Qt::DecorationRole, UIThemeManager::instance()->getIcon(u"error"_s));
+    auto *deleted = new QListWidgetItem(this);
+    deleted->setData(Qt::DisplayRole, tr("Borradas (0)"));
+    deleted->setData(Qt::DecorationRole, UIThemeManager::instance()->getIcon(u"list-remove"_s));
 
     const QList<BitTorrent::Torrent *> torrents = BitTorrent::Session::instance()->torrents();
     update(torrents);
     connect(BitTorrent::Session::instance(), &BitTorrent::Session::torrentsUpdated
             , this, &StatusFilterWidget::update);
+    // Al marcar o desmarcar una descarga como borrada cambia de estado aunque no cambie nada más
+    connect(BitTorrent::Session::instance(), &BitTorrent::Session::torrentTagAdded
+            , this, [this](BitTorrent::Torrent *torrent, const Tag &) { update({torrent}); });
+    connect(BitTorrent::Session::instance(), &BitTorrent::Session::torrentTagRemoved
+            , this, [this](BitTorrent::Torrent *torrent, const Tag &) { update({torrent}); });
 
     const Preferences *const pref = Preferences::instance();
     connect(pref, &Preferences::changed, this, &StatusFilterWidget::configure);
@@ -154,6 +162,7 @@ void StatusFilterWidget::updateTorrentStatus(const BitTorrent::Torrent *torrent)
     update(TorrentFilter::Checking, m_nbChecking);
     update(TorrentFilter::Moving, m_nbMoving);
     update(TorrentFilter::Errored, m_nbErrored);
+    update(TorrentFilter::Deleted, m_nbDeleted);
 
     m_nbStalled = m_nbStalledUploading + m_nbStalledDownloading;
 }
@@ -175,6 +184,7 @@ void StatusFilterWidget::updateTexts()
     item(TorrentFilter::Checking)->setData(Qt::DisplayRole, tr("Checking (%1)").arg(m_nbChecking));
     item(TorrentFilter::Moving)->setData(Qt::DisplayRole, tr("Moving (%1)").arg(m_nbMoving));
     item(TorrentFilter::Errored)->setData(Qt::DisplayRole, tr("Errored (%1)").arg(m_nbErrored));
+    item(TorrentFilter::Deleted)->setData(Qt::DisplayRole, tr("Borradas (%1)").arg(m_nbDeleted));
 }
 
 void StatusFilterWidget::hideZeroItems()
@@ -192,6 +202,7 @@ void StatusFilterWidget::hideZeroItems()
     item(TorrentFilter::Checking)->setHidden(m_nbChecking == 0);
     item(TorrentFilter::Moving)->setHidden(m_nbMoving == 0);
     item(TorrentFilter::Errored)->setHidden(m_nbErrored == 0);
+    item(TorrentFilter::Deleted)->setHidden(m_nbDeleted == 0);
 
     if (currentItem() && currentItem()->isHidden())
         setCurrentRow(TorrentFilter::All, QItemSelectionModel::SelectCurrent);
@@ -266,6 +277,8 @@ void StatusFilterWidget::torrentAboutToBeDeleted(BitTorrent::Torrent *const torr
         --m_nbMoving;
     if (status[TorrentFilter::Errored])
         --m_nbErrored;
+    if (status[TorrentFilter::Deleted])
+        --m_nbDeleted;
 
     m_nbStalled = m_nbStalledUploading + m_nbStalledDownloading;
 

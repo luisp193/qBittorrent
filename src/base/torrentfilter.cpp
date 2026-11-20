@@ -44,6 +44,7 @@ const std::optional<QString> TorrentFilter::AnyCategory;
 const std::optional<Tag> TorrentFilter::AnyTag;
 const std::optional<QString> TorrentFilter::AnyTrackerHost;
 const std::optional<TorrentAnnounceStatus> TorrentFilter::AnyAnnounceStatus;
+const Tag TorrentFilter::DeletedTag {u"BORRADAS"_s};
 
 QString getTrackerHost(const QString &url)
 {
@@ -158,6 +159,13 @@ bool TorrentFilter::match(const Torrent *const torrent) const
 bool TorrentFilter::matchStatus(const Torrent *const torrent) const
 {
     const TorrentState state = torrent->state();
+
+    // Las borradas solo aparecen en "Todos" y en "Borradas", no en los demás estados
+    const bool isDeleted = torrent->hasTag(DeletedTag);
+    if (m_status == Deleted)
+        return isDeleted;
+    if (isDeleted && (m_status != All))
+        return false;
 
     switch (m_status)
     {

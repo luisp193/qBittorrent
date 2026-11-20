@@ -47,6 +47,7 @@ public:
 
 protected:
     bool lessThan(const QModelIndex &left, const QModelIndex &right) const override;
+    bool filterAcceptsRow(int sourceRow, const QModelIndex &sourceParent) const override;
 
 private:
     // we added another overload of index(), hence this using directive:

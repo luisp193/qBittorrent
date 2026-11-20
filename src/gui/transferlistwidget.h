@@ -140,6 +140,7 @@ private:
     void confirmRemoveAllTagsForSelection();
     void checkDeletedAllTorrents();
     int moveDeletedTorrents(const QList<BitTorrent::Torrent *> &torrents);
+    int restoreUndeletedTorrents(const QList<BitTorrent::Torrent *> &torrents);
     TagSet askTagsForSelection(const QString &dialogTitle);
     void applyToSelectedTorrents(const std::function<void (BitTorrent::Torrent *const)> &fn);
     QList<BitTorrent::Torrent *> getVisibleTorrents() const;

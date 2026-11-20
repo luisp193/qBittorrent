@@ -43,6 +43,7 @@ Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 | V2 | Descargas borradas → categoría **BORRADAS**: revisión a los 2 min de arrancar y cada 24 h, y opción **"Comprobar borrado"** en el menú del botón derecho | `src/gui/transferlistwidget.cpp/.h` |
 | V3 | Cambios propios recolocados sobre la versión estable oficial 5.3.0, y revisión mensual automática | `.github/workflows/sync_upstream_monthly.yaml` |
 | V4 | Más ligero para ver películas con VLC: prioridad baja de disco y CPU, E/S de disco "simple pread/pwrite" por defecto y **modo película** (tortuga automática con VLC abierto) | `src/app/application.cpp`, `src/base/bittorrent/sessionimpl.cpp` |
+| V5 | BORRADAS pasa de categoría a **estado "Borradas"** en el panel Estado (la descarga conserva su categoría) | `src/base/torrentfilter.cpp/.h`, `src/gui/transferlistfilters/statusfilterwidget.cpp/.h`, `src/gui/transferlistfilters/tagfilterproxymodel.cpp/.h`, `src/gui/transferlistwidget.cpp/.h` |
 
 ### Detalle de "más ligero / modo película" (V4)
 
@@ -50,14 +51,17 @@ Se compila en GitHub Actions con `.github/workflows/build_ubuntu_appimage.yaml`:
 - Tipo de E/S de disco por defecto = `SimplePreadPwrite` en vez de `Default` (mmap). Evita los picos de memoria y de escritura a disco de libtorrent 2.0 que congelan el sistema. Se puede cambiar en Opciones → Avanzado → "Tipo de E/S de disco".
 - **Modo película**: cada 5 s mira en `/proc/*/comm` si hay un proceso `vlc`. Si lo hay, activa los límites de velocidad alternativos (la tortuga, por defecto 10 KiB/s) y lo anota en el Registro; al cerrar VLC los quita (solo si los puso él). Al salir de qBittorrent también los quita. Funciones `isVlcRunning()`, `startVlcWatcher()`, `restoreVlcWatcherSpeedLimit()`.
 
-### Detalle de "BORRADAS" (V2)
+### Detalle de "Borradas" (V2, estado desde V5)
 
-Código en `src/gui/transferlistwidget.cpp`: `isTorrentDeleted()`, `moveDeletedTorrents()`, `checkDeletedAllTorrents()`, `checkDeletedSelectedTorrents()`; temporizador en el constructor de `TransferListWidget`.
+Código en `src/gui/transferlistwidget.cpp`: `isTorrentDeleted()`, `hasFilesAgain()`, `migrateOldDeletedCategory()`, `moveDeletedTorrents()`, `restoreUndeletedTorrents()`, `checkDeletedAllTorrents()`, `checkDeletedSelectedTorrents()`; temporizador en el constructor de `TransferListWidget`.
 
 - Una descarga cuenta como borrada si **ninguno** de los archivos que ya tenía descargados (progreso > 0) existe en el disco. Si se borra solo una parte, no se marca.
 - No se marca si no existe ni la carpeta de destino (p. ej. disco externo desconectado), ni si está sin metadatos, comprobándose o moviéndose.
-- Al marcarla: se crea la categoría `BORRADAS` si no existe, se desactiva la gestión automática (para que no mueva archivos), se pone la categoría, se **detiene** y se anota en el Registro.
-- "Comprobar borrado" hace lo mismo con las seleccionadas y muestra un mensaje con el resultado.
+- Al marcarla: se **detiene**, se le pone la etiqueta interna `BORRADAS` (`TorrentFilter::DeletedTag`) y se anota en el Registro. **No se le cambia la categoría.**
+- **Estado "Borradas"**: `TorrentFilter::Deleted` (último antes de `_Count`), con contador en el panel Estado (`statusfilterwidget.cpp`). Las borradas **solo salen en "Todos" y en "Borradas"**: `matchStatus()` las excluye de los demás estados (Completados, Detenido, etc.).
+- La etiqueta interna no se ve en el panel Etiquetas (`TagFilterProxyModel::filterAcceptsRow`) ni en el submenú Etiquetas, y "Quitar todas" las etiquetas la conserva. Sí aparece en la columna Etiquetas.
+- "Comprobar borrado" (botón derecho) marca las seleccionadas que estén borradas y **saca de Borradas** las que vuelvan a tener algún archivo en el disco (siguen detenidas), y muestra un mensaje con el resultado.
+- Migración: hasta V4 se usaba la **categoría** `BORRADAS`. En la revisión (a los 2 min y cada 24 h) las descargas de esa categoría pasan al estado Borradas (sin categoría) y la categoría se elimina.
 
 ## Revisión mensual automática
 

@@ -33,6 +33,7 @@
 #include <chrono>
 
 #include <QClipboard>
+#include <QCoreApplication>
 #include <QDebug>
 #include <QFileDialog>
 #include <QHeaderView>
@@ -666,7 +667,14 @@ void TransferListWidget::setTorrentOptions()
 
 namespace
 {
-    const QString DELETED_CATEGORY = u"BORRADAS"_s;
+    // Hasta V4 las borradas se pasaban a una categoría con este nombre;
+    // desde V5 son un estado propio (etiqueta interna TorrentFilter::DeletedTag).
+    const QString OLD_DELETED_CATEGORY = u"BORRADAS"_s;
+
+    bool isMarkedDeleted(const BitTorrent::Torrent *torrent)
+    {
+        return torrent->hasTag(TorrentFilter::DeletedTag);
+    }
 
     // Una descarga se considera borrada cuando ninguno de los archivos que ya
     // había descargado (aunque fuera en parte) sigue existiendo en el disco.
@@ -695,33 +703,86 @@ namespace
 
         return hadFiles;
     }
+
+    // Al menos un archivo descargado vuelve a estar en el disco
+    bool hasFilesAgain(const BitTorrent::Torrent *torrent)
+    {
+        if (!torrent->hasMetadata())
+            return false;
+
+        const Path storageLocation = torrent->actualStorageLocation();
+        if (storageLocation.isEmpty() || !storageLocation.exists())
+            return false;
+
+        for (int i = 0; i < torrent->filesCount(); ++i)
+        {
+            if ((storageLocation / torrent->actualFilePath(i)).exists())
+                return true;
+        }
+        return false;
+    }
+
+    // Pasa las descargas de la antigua categoría BORRADAS al estado Borradas
+    void migrateOldDeletedCategory()
+    {
+        auto *session = BitTorrent::Session::instance();
+        if (!session->categories().contains(OLD_DELETED_CATEGORY))
+            return;
+
+        const QList<BitTorrent::Torrent *> torrents = session->torrents();
+        for (BitTorrent::Torrent *torrent : torrents)
+        {
+            if (torrent->category() != OLD_DELETED_CATEGORY)
+                continue;
+
+            torrent->setCategory(QString());
+            torrent->addTag(TorrentFilter::DeletedTag);
+        }
+        session->removeCategory(OLD_DELETED_CATEGORY);
+        LogMsg(QCoreApplication::translate("TransferListWidget", "La categoría %1 se ha cambiado por el estado Borradas").arg(OLD_DELETED_CATEGORY));
+    }
 }
 
 int TransferListWidget::moveDeletedTorrents(const QList<BitTorrent::Torrent *> &torrents)
 {
-    auto *session = BitTorrent::Session::instance();
     int count = 0;
     for (BitTorrent::Torrent *torrent : torrents)
     {
-        if ((torrent->category() == DELETED_CATEGORY) || !isTorrentDeleted(torrent))
+        if (isMarkedDeleted(torrent) || !isTorrentDeleted(torrent))
             continue;
 
-        if (!session->categories().contains(DELETED_CATEGORY))
-            session->addCategory(DELETED_CATEGORY);
-
-        // Sin gestión automática para que el cambio de categoría no mueva nada
-        torrent->setAutoTMMEnabled(false);
-        torrent->setCategory(DELETED_CATEGORY);
         torrent->stop();
-        LogMsg(tr("Descarga borrada del disco, pasada a %1: \"%2\"").arg(DELETED_CATEGORY, torrent->name()));
+        torrent->addTag(TorrentFilter::DeletedTag);
+        LogMsg(tr("Descarga borrada del disco, pasada al estado Borradas: \"%1\"").arg(torrent->name()));
         ++count;
     }
 
+    if (count > 0)
+        m_sortFilterModel->invalidate();
+    return count;
+}
+
+int TransferListWidget::restoreUndeletedTorrents(const QList<BitTorrent::Torrent *> &torrents)
+{
+    int count = 0;
+    for (BitTorrent::Torrent *torrent : torrents)
+    {
+        if (!isMarkedDeleted(torrent) || !hasFilesAgain(torrent))
+            continue;
+
+        torrent->removeTag(TorrentFilter::DeletedTag);
+        LogMsg(tr("Los archivos han vuelto al disco, sale del estado Borradas: \"%1\"").arg(torrent->name()));
+        ++count;
+    }
+
+    if (count > 0)
+        m_sortFilterModel->invalidate();
     return count;
 }
 
 void TransferListWidget::checkDeletedAllTorrents()
 {
+    migrateOldDeletedCategory();
     moveDeletedTorrents(BitTorrent::Session::instance()->torrents());
 }
 
@@ -732,10 +793,16 @@ void TransferListWidget::checkDeletedSelectedTorrents()
         return;
 
     const int moved = moveDeletedTorrents(torrents);
-    const QString message = (moved > 0)
-        ? tr("%1 de %2 descargas seleccionadas estaban borradas y se han pasado a %3.").arg(QString::number(moved), QString::number(torrents.size()), DELETED_CATEGORY)
-        : tr("Ninguna de las descargas seleccionadas está borrada: sus archivos siguen en el disco (o ya estaban en %1).").arg(DELETED_CATEGORY);
-    QMessageBox::information(this, tr("Comprobar borrado"), message);
+    const int restored = restoreUndeletedTorrents(torrents);
+
+    QStringList lines;
+    if (moved > 0)
+        lines << tr("%1 de %2 descargas seleccionadas estaban borradas y se han pasado al estado Borradas.").arg(QString::number(moved), QString::number(torrents.size()));
+    if (restored > 0)
+        lines << tr("%1 descargas tenían otra vez sus archivos en el disco y han salido de Borradas (siguen detenidas: pulsa Iniciar si quieres reanudarlas).").arg(QString::number(restored));
+    if (lines.isEmpty())
+        lines << tr("Ninguna de las descargas seleccionadas está borrada: sus archivos siguen en el disco (o ya estaban en Borradas).");
+    QMessageBox::information(this, tr("Comprobar borrado"), lines.join(u"\n\n"_s));
 }
 
 void TransferListWidget::recheckSelectedTorrents()
@@ -1067,7 +1134,14 @@ void TransferListWidget::removeSelectionTag(const Tag &tag)
 
 void TransferListWidget::clearSelectionTags()
 {
-    applyToSelectedTorrents([](BitTorrent::Torrent *const torrent) { torrent->clearTags(); });
+    applyToSelectedTorrents([](BitTorrent::Torrent *const torrent)
+    {
+        // "Quitar todas" las etiquetas no debe sacar la descarga del estado Borradas
+        const bool wasDeleted = torrent->hasTag(TorrentFilter::DeletedTag);
+        torrent->clearTags();
+        if (wasDeleted)
+            torrent->addTag(TorrentFilter::DeletedTag);
+    });
 }
 
 void TransferListWidget::displayListMenu()
@@ -1327,6 +1401,9 @@ void TransferListWidget::displayListMenu()
     const TagSet tags = BitTorrent::Session::instance()->tags();
     for (const Tag &tag : asConst(tags))
     {
+        if (tag == TorrentFilter::DeletedTag)
+            continue; // es el estado Borradas, no una etiqueta que se ponga a mano
+
         auto *action = new TriStateAction(Utils::Gui::tagToWidgetText(tag), tagsMenu);
         action->setCloseOnInteraction(false);
 

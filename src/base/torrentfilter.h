@@ -63,9 +63,14 @@ public:
         Checking,
         Moving,
         Errored,
+        Deleted, // Propio: descargas cuyos archivos se han borrado del disco
 
         _Count
     };
+
+    // Etiqueta interna que marca una descarga como borrada (estado "Borradas").
+    // No se muestra en el panel de etiquetas ni en el menú de etiquetas.
+    static const Tag DeletedTag;
 
     // These mean any permutation, including no category / tag.
     static const std::optional<TorrentIDSet> AnyID;
